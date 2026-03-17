@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+/* --- Styles --- */
+.container-flex { display:flex; gap:30px; margin-top:18px; }
+.left-panel { flex:2; }
+.right-panel { flex:1; border-left:1px solid #eee; padding-left:18px; }
+.saved-list { max-height:70vh; overflow-y:auto; }
+.saved-card { border:1px solid #ddd; padding:8px; border-radius:8px; margin-bottom:10px; background:#fafafa; position:relative; }
+.saved-card img { width:100%; display:block; border-radius:6px; margin-bottom:6px; }
+.download-btn { display:inline-block; padding:5px 8px; background:#0284c7; color:white; text-decoration:none; border-radius:4px; font-size:12px; margin-right:6px;}
+.download-btn:hover { background:#0369a1; }
+.btn { display:inline-block; padding:6px 10px; border-radius:6px; background:#1976d2; color:white; text-decoration:none; cursor:pointer; }
+.btn-secondary { background:#666; }
+.label-row { font-size:13px; color:#222; margin:3px 0; }
+.delete-btn { position:absolute; top:5px; right:5px; background:red; padding:2px 6px; font-size:12px; border-radius:4px; color:white; border:none; cursor:pointer; }
+.delete-frame-inline { background:#dc2626; color:white; padding:6px 8px; border-radius:4px; border:none; cursor:pointer; }
+#label-badge { position:absolute; top:10px; left:10px; background:rgba(0,128,0,0.7); color:white; padding:5px 10px; border-radius:5px; display:none; font-weight:bold;}
+.small { font-size:12px; color:#555; }
+</style>
+
+<h2>Annotate — {{ video.filename }}</h2>
+
+<div class="container-flex">
+    
+    <!-- LEFT PANEL -->
+    <div class="left-panel">
+        <video id="videoPlayer" width="760" controls crossorigin="anonymous">
+            <source src="{{ url_for('serve_video', filename=video.filename) }}" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+
+        <div style="margin-top:10px;">
+            <b>Current time:</b> <span id="currentTime">0.00</span>s
+            &nbsp;&nbsp;
+            <button class="btn btn-secondary" onclick="stepFrame(-1)">◀ Frame</button>
+            <button class="btn btn-secondary" onclick="stepFrame(1)">Frame ▶</button>
+            <button class="btn btn-secondary" onclick="deleteVideo()">Delete Video</button>
+        </div>
+
+        <hr>
+
+        <form id="annotForm" onsubmit="return false;">
+            <input type="hidden" id="video_id" value="{{ video.video_id }}">
+
+            <!-- Timestamp -->
+            <div style="margin:6px 0;">
+                <label><b>Timestamp:</b></label>
+                <select id="timestampDropdown">
+                    <option value="">Select time</option>
+                    {% for s in range((video.duration|int) + 1) %}
+                        <option value="{{ s }}">{{ s }} s</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn" onclick="useCurrentTime()">Use current time</button>
+            </div>
+
+            <!-- Category + Label -->
+            <div style="margin:6px 0;">
+                <label><b>Category:</b></label>
+                <select id="category" onchange="updateLabels()">
+                    <option disabled selected>Select category</option>
+                    <option value="eyegaze">Eye Gaze</option>
+                    <option value="facial_expression">Facial Expression</option>
+                    <option value="gesture">Gesture</option>
+                    <option value="body_movement">Body Movement</option>
+                    <option value="vocalization">Vocalization</option>
+                    <option value="social_response">Social Response</option>
+                </select>
+
+                <label style="margin-left:12px;"><b>Label:</b></label>
+                <select id="label">
+                    <option disabled selected>Select label</option>
+                </select>
+            </div>
+
+            <!-- Notes + Save -->
+            <div style="margin:6px 0;">
+                <input id="value" placeholder="Notes (optional)" style="width:60%; padding:6px;">
+                <button class="btn" onclick="captureAndSave()">Save (capture frame)</button>
+                <a id="downloadZip" class="btn" style="margin-left:12px;" 
+                   href="{{ url_for('export_zip', video_id=video.video_id) }}">
+                   Download ZIP
+                </a>
+            </div>
+        </form>
+
+        <div id="label-badge">Labeled ✅</div>
+    </div>
+
+    <!-- RIGHT PANEL -->
+    <div class="right-panel">
+        <h4>Saved frames</h4>
+        <div id="savedList" class="saved-list">
+            <p style="color:#777">No saved frames yet.</p>
+        </div>
+    </div>
+
+</div>
+
+
+<!-- ============================= JAVASCRIPT ============================= -->
+<script>
+/* ---------- CONFIG ---------- */
+const video = document.getElementById("videoPlayer");
+const currentTime = document.getElementById("currentTime");
+const videoId = "{{ video.video_id }}";
+
+/* ---------- LABELS ---------- */
+const LABELS = {
+  eyegaze: ["looks_at_parent","looks_at_examiner","avoids_eye_contact","joint_attention_present","joint_attention_absent"],
+  facial_expression: ["smile","neutral","frown","surprise","discomfort"],
+  gesture: ["pointing","hand_flapping","reaching","waving","no_gesture"],
+  body_movement: ["still","rocking","repetitive_movement","wandering"],
+  vocalization: ["babbling","word","phrase","echolalia","no_vocalization"],
+  social_response: ["responds_to_name","does_not_respond_to_name","initiates_interaction","avoids_interaction"]
+};
+
+/* Update label list based on category */
+function updateLabels(){
+    const c = document.getElementById("category").value;
+    const sel = document.getElementById("label");
+    sel.innerHTML = "";
+    if(!LABELS[c]) return;
+    LABELS[c].forEach(x=>{
+        let o = document.createElement("option");
+        o.value = x;
+        o.textContent = x.replace(/_/g," ");
+        sel.appendChild(o);
+    });
+}
+
+/* ---------- VIDEO + TIMESTAMP ---------- */
+video.addEventListener("timeupdate", ()=> {
+    currentTime.textContent = video.currentTime.toFixed(2);
+});
+
+function stepFrame(dir){
+    const fps = (video.frameRate || 25);
+    const step = 1.0 / fps;
+    video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + dir * step));
+}
+
+function useCurrentTime(){
+    const t = video.currentTime.toFixed(2);
+    const dd = document.getElementById("timestampDropdown");
+    let found=false;
+
+    for(let i=0; i<dd.options.length; i++){
+        if(dd.options[i].value === t){ found=true; break; }
+    }
+
+    if(!found){
+        let opt = document.createElement("option");
+        opt.value=t; 
+        opt.textContent = t + " s";
+        dd.appendChild(opt);
+    }
+
+    dd.value = t;
+}
+
+/* ---------- SAVED FRAMES UI ---------- */
+function prependSavedCard(data){
+    const list = document.getElementById("savedList");
+    if(list.querySelector("p")) list.innerHTML = "";
+
+    const card = document.createElement("div");
+    card.className = "saved-card";
+
+    card.innerHTML = `
+        <img src="${data.preview}" alt="frame">
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+            <a href="${data.preview}" download class="download-btn">⬇ Download PNG</a>
+            <button class="delete-frame-inline" onclick="deleteFrame('${data.frame_path}')">🗑 Delete</button>
+        </div>
+
+        <div class="label-row"><b>Time:</b> ${data.timestamp}s</div>
+        <div class="label-row"><b>Category:</b> ${data.category.replace(/_/g,' ')}</div>
+        <div class="label-row"><b>Label:</b> ${data.label.replace(/_/g,' ')}</div>
+        <div class="label-row small"><b>Notes:</b> ${data.value || "-"}</div>
+    `;
+
+    list.prepend(card);
+}
+
+async function loadSavedFrames(){
+    try{
+        const res = await fetch(`/get_events/${videoId}`);
+        if(!res.ok) return;
+
+        const events = await res.json();
+        for(let i = events.length - 1; i >= 0; i--){
+            const e = events[i];
+            if(e.frame){
+                prependSavedCard({
+                    preview: `/frames/${videoId}/${e.frame}`,
+                    timestamp: e.timestamp,
+                    category: e.category || "",
+                    label: e.label || "",
+                    value: e.value || "",
+                    frame_path: `${videoId}/${e.frame}`
+                });
+            }
+        }
+    }catch(err){
+        console.warn("Load saved frames failed:", err);
+    }
+}
+
+window.addEventListener("load", loadSavedFrames);
+
+/* ---------- CAPTURE + SAVE ---------- */
+function captureAndSave(){
+    const cat = document.getElementById("category").value;
+    const label = document.getElementById("label").value;
+    const value = document.getElementById("value").value;
+    const timestamp = document.getElementById("timestampDropdown").value || video.currentTime.toFixed(2);
+
+    if(!cat || !label){
+        alert("Please select category and label.");
+        return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 360;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0,0, canvas.width, canvas.height);
+
+    const dataUrl = canvas.toDataURL("image/png");
+
+    const payload = {
+        video_id: videoId,
+        timestamp,
+        category: cat,
+        label: label,
+        value: value,
+        frame: dataUrl
+    };
+
+    fetch("/save_event", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+    })
+    .then(r=>r.json())
+    .then(j=>{
+        if(j && j.ok){
+            prependSavedCard({
+                preview: j.frame_url || dataUrl,
+                timestamp,
+                category: cat,
+                label,
+                value,
+                frame_path: `${videoId}/${j.frame_filename}`
+            });
+
+            const badge = document.getElementById("label-badge");
+            badge.style.display = "block";
+            setTimeout(()=> badge.style.display = "none", 900);
+        }
+        else{
+            alert(j.error || "Save failed");
+        }
+    })
+    .catch(err=>{
+        alert("Network error");
+        console.error(err);
+    });
+}
+
+/* ---------- DELETE FRAME ---------- */
+async function deleteFrame(frame_path){
+    if(!confirm("Delete this frame?")) return;
+
+    try{
+        const res = await fetch("/delete_frame", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ frame_path })
+        });
+
+        const j = await res.json();
+        if(j && j.ok){ 
+            loadSavedFrames();
+        }
+        else{
+            alert("Failed to delete frame");
+        }
+    }catch(e){
+        alert("Network error deleting frame");
+    }
+}
+
+/* ---------- DELETE VIDEO ---------- */
+async function deleteVideo(){
+    if(!confirm("Delete this video and all its frames?")) return;
+
+    try{
+        const res = await fetch("/delete_video", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ video_id: videoId })
+        });
+
+        const j = await res.json();
+        if(j && j.ok){
+            alert("Video deleted");
+            window.location.href = "/";
+        }
+        else alert("Delete failed");
+
+    }catch(e){
+        alert("Network error");
+    }
+}
+</script>
+
+{% endblock %}
