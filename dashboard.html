@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dashboard</title>
+  <link rel="stylesheet" href="/static/main.css">
+</head>
+<body>
+  <style>
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+  </style>
+  <h1>Dataset Dashboard</h1>
+  <p><a href="/">Home</a> | <a href="/logout">Logout</a></p>
+  <table>
+    <thead><tr><th>Video</th><th>Created</th><th>Thumbnails</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for v in videos %}
+      <tr>
+        <td>{{ v.filename }}</td>
+        <td>{{ v.created_at }}</td>
+        <td>
+          {% for t in v.thumbnails %}
+            <img src="/frames/{{ v.video_id }}/{{ t }}" style="height:60px;margin:2px;">
+          {% endfor %}
+        </td>
+        <td>
+          <a href="/annotate/{{ v.video_id }}">Annotate</a> |
+          <a href="/export/{{ v.video_id }}">Export JSON</a> |
+          <a href="/export_xml/{{ v.video_id }}">Export XML</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No videos</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
